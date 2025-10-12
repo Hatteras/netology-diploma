@@ -1,0 +1,7 @@
+netology-diploma_authorized_key.json
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+*.key
+*.pem
