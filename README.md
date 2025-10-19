@@ -48,7 +48,9 @@
 
 **Содержимое файлов:**
 
-- `index.html`
+<details>
+<summary>index.html</summary>
+
 ```html
 <!DOCTYPE html>
 <html lang="en">
@@ -65,7 +67,11 @@
 </html>
 ```
 
-- `styles.css`
+</details>
+
+<details>
+<summary>styles.css</summary>
+
 ```css
 body {
     background-color: lightblue;
@@ -82,7 +88,11 @@ p {
 }
 ```
 
-- `main.tf`
+</details>
+
+<details>
+<summary>main.tf</summary>
+
 ```hcl
 terraform {
   required_providers {
@@ -98,6 +108,7 @@ provider "yandex" {
   zone      = "ru-central1-a"
 }
 ```
+</details>
 
 ## Этап 1: Настройка сети в Yandex Cloud
 
@@ -134,7 +145,10 @@ provider "yandex" {
 - `.terraform.lock.hcl` — Создан автоматически после использования команды terraform init
 
 **Содержимое файлов:**
-- `main.tf`
+
+<details>
+<summary>main.tf</summary>
+
 ```hcl
 terraform {
   required_providers {
@@ -363,7 +377,12 @@ resource "yandex_compute_instance" "bastion" {
   }
 }
 ```
-- `variables.tf`
+
+</details>
+
+<details>
+<summary>variables.tf</summary>
+
 ```hcl
 variable "cloud_id" {
   description = "Yandex Cloud ID"
@@ -389,7 +408,12 @@ variable "ssh_public_key_path" {
   default     = "~/.ssh/id_ed25519.pub"
 }
 ```
-- `outputs.tf`
+
+</details>
+
+<details>
+<summary>outputs.tf</summary>
+
 ```hcl
 output "bastion_public_ip" {
   description = "Публичный IP bastion"
@@ -401,3 +425,5 @@ output "vpc_id" {
   value       = yandex_vpc_network.main.id
 }
 ```
+
+</details>
