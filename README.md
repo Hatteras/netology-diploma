@@ -99,29 +99,35 @@
   yc compute instance list
   ```
   Вывод:
+  ```
   +----+------+---------+--------+-------------+-------------+
   | ID | NAME | ZONE ID | STATUS | EXTERNAL IP | INTERNAL IP |
   +----+------+---------+--------+-------------+-------------+
   +----+------+---------+--------+-------------+-------------+
+  ```
    - Работа Terraform:
   ```bash
   terraform init
   ```
   Вывод:
+  ```
   Terraform initialized in an empty directory!
 
   The directory has no Terraform configuration files. You may begin working
   with Terraform immediately by creating Terraform configuration files.
+  ```
    - Работа Ansible:
   ```bash
   ansible localhost -m ping
   ```
   Вывод:
+  ```
   [WARNING]: No inventory was parsed, only implicit localhost is available
   localhost | SUCCESS => {
     "changed": false,
     "ping": "pong"
   }
+  ```
    - Работа Docker:
   ```bash
   yc iam create-token
@@ -129,6 +135,7 @@
   yc config get folder-id
   ```
   Вывод:
+  ```
   Unable to find image 'hello-world:latest' locally
   latest: Pulling from library/hello-world
   17eec7bbc9d7: Pull complete 
@@ -155,5 +162,6 @@
 
   For more examples and ideas, visit:
    https://docs.docker.com/get-started/
+```
 
 </details>
