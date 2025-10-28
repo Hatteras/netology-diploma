@@ -1,1 +1,15 @@
-credentials.json
+# Terraform
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+terraform.tfvars
+
+# Secrets
+*.pem
+*.key
+*.json
+
+# Локальные файлы
+*.log
+*.tmp
