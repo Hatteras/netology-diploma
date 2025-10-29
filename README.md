@@ -818,7 +818,7 @@ scheduling_policy {
     preemptible = true
   }
 ```
-3. **Добавление выходной переменной**
+3. **Добавление выходных переменных**
   - outputs.tf (добавлено):
 ```hcl
 output "bastion_ip" {
