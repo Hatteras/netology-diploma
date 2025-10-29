@@ -25,6 +25,10 @@ resource "yandex_compute_instance" "nat" {
   metadata = {
     user-data = file("${path.module}/cloud-init-nat.yml")
   }
+
+  scheduling_policy {
+    preemptible = true
+  }
 }
 
 # Маршрутная таблица

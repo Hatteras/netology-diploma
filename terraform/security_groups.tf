@@ -55,13 +55,13 @@ resource "yandex_vpc_security_group" "zabbix" {
   network_id = yandex_vpc_network.diploma.id
 
   ingress {
-    protocol       = "tcp"
-    description    = "Zabbix Server from agents"
+    protocol    = "tcp"
+    description = "Zabbix Server from agents"
     v4_cidr_blocks = [
       var.private_subnet_a_cidr,
       var.private_subnet_b_cidr
     ]
-    port           = 10051
+    port = 10051
   }
 
   ingress {

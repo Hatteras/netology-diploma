@@ -608,3 +608,347 @@ yc vpc security-group list
 ```
 
 </details>
+
+<details>
+
+<summary> Этап 3: Развертывание виртуальных машин </summary>
+
+На данном этапе проводится настройка виртуальных машин и назначение им сетевых расположений, созданных ранее.
+Настройка происходит путём редактирования соответствующих файлов для Terraform:
+1. **Определяем параметры виртуальных машин**
+  - instances.tf:
+```hcl
+# Образ
+data "yandex_compute_image" "ubuntu" {
+  family = "ubuntu-2204-lts"
+}
+
+# Bastion
+resource "yandex_compute_instance" "bastion" {
+  name        = "bastion"
+  hostname    = "bastion"
+  platform_id = "standard-v3"
+  zone        = "ru-central1-a"
+
+  resources {
+    cores         = 2
+    memory        = 2
+    core_fraction = 20
+  }
+
+  boot_disk {
+    initialize_params {
+      image_id = data.yandex_compute_image.ubuntu.id
+      size     = 10
+    }
+  }
+
+  network_interface {
+    subnet_id          = yandex_vpc_subnet.public.id
+    nat                = true
+    security_group_ids = [yandex_vpc_security_group.bastion.id]
+  }
+
+  metadata = {
+    ssh-keys = "ubuntu:${file("~/.ssh/id_rsa.pub")}"
+  }
+
+  scheduling_policy {
+    preemptible = true
+  }
+
+  allow_stopping_for_update = true
+}
+
+# Web-серверы
+resource "yandex_compute_instance" "web" {
+  for_each = {
+    "web1" = { zone = "ru-central1-a", subnet = yandex_vpc_subnet.private_a.id }
+    "web2" = { zone = "ru-central1-b", subnet = yandex_vpc_subnet.private_b.id }
+  }
+
+  name        = each.key
+  hostname    = each.key
+  platform_id = "standard-v3"
+  zone        = each.value.zone
+
+  resources {
+    cores         = 2
+    memory        = 2
+    core_fraction = 20
+  }
+
+  boot_disk {
+    initialize_params {
+      image_id = data.yandex_compute_image.ubuntu.id
+      size     = 10
+    }
+  }
+
+  network_interface {
+    subnet_id          = each.value.subnet
+    security_group_ids = [yandex_vpc_security_group.web.id]
+  }
+
+  metadata = {
+    ssh-keys = "ubuntu:${file("~/.ssh/id_rsa.pub")}"
+  }
+
+  scheduling_policy {
+    preemptible = true
+  }
+
+  allow_stopping_for_update = true
+}
+
+# Zabbix
+resource "yandex_compute_instance" "zabbix" {
+  name        = "zabbix"
+  hostname    = "zabbix"
+  platform_id = "standard-v3"
+  zone        = "ru-central1-a"
+
+  resources {
+    cores         = 2
+    memory        = 4
+    core_fraction = 20
+  }
+
+  boot_disk {
+    initialize_params {
+      image_id = data.yandex_compute_image.ubuntu.id
+      size     = 10
+    }
+  }
+
+  network_interface {
+    subnet_id          = yandex_vpc_subnet.public.id
+    nat                = true
+    security_group_ids = [yandex_vpc_security_group.zabbix.id]
+  }
+
+  metadata = {
+    ssh-keys = "ubuntu:${file("~/.ssh/id_rsa.pub")}"
+  }
+
+  scheduling_policy {
+    preemptible = true
+  }
+
+  allow_stopping_for_update = true
+}
+
+# Elasticsearch
+resource "yandex_compute_instance" "elasticsearch" {
+  name        = "elasticsearch"
+  hostname    = "elasticsearch"
+  platform_id = "standard-v3"
+  zone        = "ru-central1-a"
+
+  resources {
+    cores         = 2
+    memory        = 4
+    core_fraction = 20
+  }
+
+  boot_disk {
+    initialize_params {
+      image_id = data.yandex_compute_image.ubuntu.id
+      size     = 10
+    }
+  }
+
+  network_interface {
+    subnet_id          = yandex_vpc_subnet.private_a.id
+    security_group_ids = [yandex_vpc_security_group.elasticsearch.id]
+  }
+
+  metadata = {
+    ssh-keys = "ubuntu:${file("~/.ssh/id_rsa.pub")}"
+  }
+
+  scheduling_policy {
+    preemptible = true
+  }
+
+  allow_stopping_for_update = true
+}
+
+# Kibana
+resource "yandex_compute_instance" "kibana" {
+  name        = "kibana"
+  hostname    = "kibana"
+  platform_id = "standard-v3"
+  zone        = "ru-central1-a"
+
+  resources {
+    cores         = 2
+    memory        = 2
+    core_fraction = 20
+  }
+
+  boot_disk {
+    initialize_params {
+      image_id = data.yandex_compute_image.ubuntu.id
+      size     = 10
+    }
+  }
+
+  network_interface {
+    subnet_id          = yandex_vpc_subnet.public.id
+    nat                = true
+    security_group_ids = [yandex_vpc_security_group.kibana.id]
+  }
+
+  metadata = {
+    ssh-keys = "ubuntu:${file("~/.ssh/id_rsa.pub")}"
+  }
+
+  scheduling_policy {
+    preemptible = true
+  }
+
+  allow_stopping_for_update = true
+}
+```
+2. **Небольшое дополнение для уменьшения стоимости при тестировании**
+  - nat.tf:
+```hcl
+scheduling_policy {
+    preemptible = true
+  }
+```
+3. **Добавление выходной переменной**
+  - outputs.tf (добавлено):
+```hcl
+output "bastion_ip" {
+  value       = yandex_compute_instance.bastion.network_interface.0.nat_ip_address
+  description = "Public IP of bastion host"
+}
+
+output "web1_ip" {
+  value = yandex_compute_instance.web["web1"].network_interface.0.ip_address
+}
+
+output "web2_ip" {
+  value = yandex_compute_instance.web["web2"].network_interface.0.ip_address
+}
+
+output "elasticsearch_ip" {
+  value = yandex_compute_instance.elasticsearch.network_interface.0.ip_address
+}
+```
+4. **Скрипт для локального тестирования и упрощения доступа к Bastion и другим ресурсам по ssh.**
+  - bastion-config.sh:
+```bash
+#!/bin/bash
+
+BASTION_IP=$(terraform output -raw bastion_ip)
+WEB1_IP=$(terraform output -raw web1_ip)
+WEB2_IP=$(terraform output -raw web2_ip)
+ELASTIC_IP=$(terraform output -raw elasticsearch_ip)
+
+cat > ~/.ssh/config << EOF
+Host bastion
+    HostName $BASTION_IP
+    User ubuntu
+    Port 22
+    IdentityFile ~/.ssh/id_rsa
+    StrictHostKeyChecking no
+
+Host web1
+    HostName $WEB1_IP
+    User ubuntu
+    ProxyJump bastion
+    IdentityFile ~/.ssh/id_rsa
+    StrictHostKeyChecking no
+
+Host web2
+    HostName $WEB2_IP
+    User ubuntu
+    ProxyJump bastion
+    IdentityFile ~/.ssh/id_rsa
+    StrictHostKeyChecking no
+
+Host elasticsearch
+    HostName $ELASTIC_IP
+    User ubuntu
+    ProxyJump bastion
+    IdentityFile ~/.ssh/id_rsa
+    StrictHostKeyChecking no
+EOF
+
+echo "Конфигурация SSH обновлена:"
+echo "  bastion   → $BASTION_IP"
+echo "  web1      → $WEB1_IP"
+echo "  web2      → $WEB2_IP"
+echo "  elasticsearch → $ELASTIC_IP"
+```
+
+5. **Деплой и тестирование**
+  - Инициализация, планирование и деплой:
+```bash
+terraform fmt
+terraform validate
+terraform plan
+terraform apply
+./bastion-config.sh
+```
+Вывод:
+```bash
+Apply complete! Resources: 18 added, 0 changed, 0 destroyed.
+
+Outputs:
+
+bastion_ip = "158.160.111.52"
+elasticsearch_ip = "192.168.2.31"
+nat_ip = "158.160.54.161"
+private_subnet_a_id = "e9bcifv6q670jglbajeq"
+private_subnet_b_id = "e2l8j6uo7tkl09t3qcu9"
+public_subnet_id = "e9bfean41vsnii4ab4p3"
+vpc_id = "enpb9gdfap5hcrtqn16p"
+web1_ip = "192.168.2.35"
+web2_ip = "192.168.3.28"
+
+Конфигурация SSH обновлена:
+  bastion   → 158.160.111.52
+  web1      → 192.168.2.35
+  web2      → 192.168.3.28
+  elasticsearch → 192.168.2.31
+```
+  - Проверка виртуальных машин:
+```bash
+yc compute instance list
+```
+Вывод:
+```bash
++----------------------+---------------+---------------+---------+----------------+--------------+
+|          ID          |     NAME      |    ZONE ID    | STATUS  |  EXTERNAL IP   | INTERNAL IP  |
++----------------------+---------------+---------------+---------+----------------+--------------+
+| epdiu875v5d77s5io5oe | web2          | ru-central1-b | RUNNING |                | 192.168.3.28 |
+| fhm80u89i2cupbfpkdob | web1          | ru-central1-a | RUNNING |                | 192.168.2.35 |
+| fhmaqho69ni2r541m6ku | bastion       | ru-central1-a | RUNNING | 158.160.111.52 | 192.168.1.24 |
+| fhmbf2vovfd18ajsb5fn | elasticsearch | ru-central1-a | RUNNING |                | 192.168.2.31 |
+| fhmcn5jrvdbdgudn914o | kibana        | ru-central1-a | RUNNING | 158.160.106.99 | 192.168.1.21 |
+| fhmehvfob3qiqp5mg4m1 | nat-gateway   | ru-central1-a | RUNNING | 158.160.54.161 | 192.168.1.10 |
+| fhms9f2ve6rteb84btnv | zabbix        | ru-central1-a | RUNNING | 158.160.49.47  | 192.168.1.35 |
++----------------------+---------------+---------------+---------+----------------+--------------+
+```
+  - Проверка доступа по SSH:
+```bash
+ssh web1 whoami
+```
+Вывод:
+```bash
+ubuntu
+```
+  - Проверка NAT из приватной сети:
+```bash
+ssh web2 curl -s ifconfig.me
+```
+Вывод:
+```bash
+158.160.54.161
+```
+
+</details>
