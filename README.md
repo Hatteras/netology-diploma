@@ -17,7 +17,7 @@
 
 <summary> Этап 1. Подготовка </summary>
 
-На данном этапе проводится подготовка к развертыванию инфраструктуры:
+На данном этапе проводится подготовка к развертыванию инфраструктуры.
 1. **Настроен аккаунт Yandex Cloud**:
   - Создан сервисный аккаунт с ролью `editor`.
   - Сгенерирован ключ для Terraform (хранится локально, не в Git).
@@ -161,8 +161,6 @@ For more examples and ideas, visit:
 <summary> Этап 2: Настройка сети и групп безопасности </summary>
 
 На данном этапе проводится настройка провайдера, развёртывыние сетей, Security Groups и NAT.
-Настройка происходит путём редактирования соответствующих файлов для Terraform:
-
 1. **Фиксируем версии и настраиваем провайдера**
   - versions.tf:
 ```hcl
@@ -272,59 +270,22 @@ resource "yandex_vpc_subnet" "private_b" {
 4. **Настраиваем NAT-шлюз и таблицу маршрутов**
   - nat.tf:
 ```hcl
-# NAT Instance (минимальная ВМ)
-resource "yandex_compute_instance" "nat" {
-  name        = "nat-gateway"
-  platform_id = "standard-v3"
-  zone        = "ru-central1-a"
-
-  resources {
-    cores         = 2
-    memory        = 2
-    core_fraction = 20
-  }
-
-  boot_disk {
-    initialize_params {
-      image_id = "fd851hdolfjh210g3c17"  # NAT-instance image (Yandex)
-      size     = 10
-    }
-  }
-
-  network_interface {
-    subnet_id = yandex_vpc_subnet.public.id
-    nat       = true
-  }
-
-  metadata = {
-    user-data = file("${path.module}/cloud-init-nat.yml")
-  }
+# NAT-шлюз (управляется Yandex'ом)
+resource "yandex_vpc_gateway" "nat_gateway" {
+  name = "nat-gateway"
+  shared_egress_gateway {}
 }
 
 # Маршрутная таблица
 resource "yandex_vpc_route_table" "nat" {
-  name       = "nat-route-table"
+  name       = "private-rt"
   network_id = yandex_vpc_network.diploma.id
 
   static_route {
     destination_prefix = "0.0.0.0/0"
-    next_hop_address   = yandex_compute_instance.nat.network_interface.0.ip_address
+    gateway_id         = yandex_vpc_gateway.nat_gateway.id
   }
 }
-```
-  - cloud-init-nat.yml:
-```yaml
-network:
-  version: 2
-  ethernets:
-    eth0:
-      dhcp4: true
-      dhcp4-overrides:
-        use-dns: false
-runcmd:
-  - sysctl -w net.ipv4.ip_forward=1
-  - iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-  - echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.conf
 ```
 5. **Настраиваем Security Groups**
   - security-groups.tf:
@@ -463,6 +424,12 @@ resource "yandex_vpc_security_group" "alb" {
     port           = 80
   }
 
+  ingress {
+    protocol          = "any"
+    description       = "ALB Health Checks"
+    predefined_target = "loadbalancer_healthchecks"
+  }
+
   egress {
     protocol       = "any"
     v4_cidr_blocks = ["0.0.0.0/0"]
@@ -486,10 +453,6 @@ output "private_subnet_a_id" {
 
 output "private_subnet_b_id" {
   value = yandex_vpc_subnet.private_b.id
-}
-
-output "nat_ip" {
-  value = yandex_compute_instance.nat.network_interface.0.nat_ip_address
 }
 ```
 7. **Обновляем .gitignore**
@@ -526,7 +489,6 @@ Apply complete! Resources: 4 added, 0 changed, 0 destroyed.
 
 Outputs:
 
-nat_ip = "158.160.101.53"
 private_subnet_a_id = "e9barqde95t2rcjf8uat"
 private_subnet_b_id = "e2l2sebcm20e81l21k7f"
 public_subnet_id = "e9blrcb6v4jh4ueup7es"
@@ -553,39 +515,27 @@ yc vpc subnet list
 | e9blrcb6v4jh4ueup7es | public-subnet    | enpm1n1vj6mnoir9s07g |                      | ru-central1-a | [192.168.1.0/24] |
 +----------------------+------------------+----------------------+----------------------+---------------+------------------+
 ```
-  - Проверка NAT-gateway:
-```bash
-yc compute instance list
-```
-Вывод:
-```
-+----------------------+-------------+---------------+---------+----------------+--------------+
-|          ID          |    NAME     |    ZONE ID    | STATUS  |  EXTERNAL IP   | INTERNAL IP  |
-+----------------------+-------------+---------------+---------+----------------+--------------+
-| fhmmatrfpg5g7gkst11p | nat-gateway | ru-central1-a | RUNNING | 158.160.101.53 | 192.168.1.33 |
-+----------------------+-------------+---------------+---------+----------------+--------------+
-```
-  - Проверка маршрутной таблицы:
+  - Проверка маршрутной таблицы NAT:
 ```bash
 yc vpc route-table list
-yc vpc route-table get nat-route-table
+yc vpc route-table get private-rt
 ```
 Вывод:
 ```
-+----------------------+-----------------+-------------+----------------------+
-|          ID          |      NAME       | DESCRIPTION |      NETWORK-ID      |
-+----------------------+-----------------+-------------+----------------------+
-| enp4qmo8v4utndon8p24 | nat-route-table |             | enpm1n1vj6mnoir9s07g |
-+----------------------+-----------------+-------------+----------------------+
++----------------------+------------+-------------+----------------------+
+|          ID          |    NAME    | DESCRIPTION |      NETWORK-ID      |
++----------------------+------------+-------------+----------------------+
+| enptd2905th1oar8br6c | private-rt |             | enpjcf9clf2hj4de6kcm |
++----------------------+------------+-------------+----------------------+
 
-id: enp4qmo8v4utndon8p24
+id: enptd2905th1oar8br6c
 folder_id: b1gh19tdmqdb1m0tod0r
-created_at: "2025-10-28T19:31:29Z"
-name: nat-route-table
-network_id: enpm1n1vj6mnoir9s07g
+created_at: "2025-11-02T12:22:26Z"
+name: private-rt
+network_id: enpjcf9clf2hj4de6kcm
 static_routes:
   - destination_prefix: 0.0.0.0/0
-    next_hop_address: 192.168.1.33
+    gateway_id: enpkq1ilbv8tf5j9k0sb
 ```
   - Проверка Security Groups:
 ```bash
@@ -613,8 +563,7 @@ yc vpc security-group list
 
 <summary> Этап 3: Развертывание виртуальных машин </summary>
 
-На данном этапе проводится настройка виртуальных машин и назначение им сетевых расположений, созданных ранее.
-Настройка происходит путём редактирования соответствующих файлов для Terraform:
+На данном этапе проводится развёртывание и настройка виртуальных машин и назначение им сетевых расположений, созданных ранее.
 1. **Определяем параметры виртуальных машин**
   - instances.tf:
 ```hcl
@@ -811,14 +760,7 @@ resource "yandex_compute_instance" "kibana" {
   allow_stopping_for_update = true
 }
 ```
-2. **Небольшое дополнение для уменьшения стоимости при тестировании**
-  - nat.tf:
-```hcl
-scheduling_policy {
-    preemptible = true
-  }
-```
-3. **Добавление выходных переменных**
+2. **Добавление выходных переменных**
   - outputs.tf (добавлено):
 ```hcl
 output "bastion_ip" {
@@ -838,7 +780,7 @@ output "elasticsearch_ip" {
   value = yandex_compute_instance.elasticsearch.network_interface.0.ip_address
 }
 ```
-4. **Скрипт для локального тестирования и упрощения доступа к Bastion и другим ресурсам по ssh.**
+3. **Скрипт для локального тестирования и упрощения доступа к Bastion и другим ресурсам по ssh**
   - bastion-config.sh:
 ```bash
 #!/bin/bash
@@ -885,7 +827,7 @@ echo "  web2      → $WEB2_IP"
 echo "  elasticsearch → $ELASTIC_IP"
 ```
 
-5. **Деплой и тестирование**
+4. **Деплой и тестирование**
   - Инициализация, планирование и деплой:
 ```bash
 terraform fmt
@@ -902,7 +844,6 @@ Outputs:
 
 bastion_ip = "158.160.111.52"
 elasticsearch_ip = "192.168.2.31"
-nat_ip = "158.160.54.161"
 private_subnet_a_id = "e9bcifv6q670jglbajeq"
 private_subnet_b_id = "e2l8j6uo7tkl09t3qcu9"
 public_subnet_id = "e9bfean41vsnii4ab4p3"
@@ -930,7 +871,6 @@ yc compute instance list
 | fhmaqho69ni2r541m6ku | bastion       | ru-central1-a | RUNNING | 158.160.111.52 | 192.168.1.24 |
 | fhmbf2vovfd18ajsb5fn | elasticsearch | ru-central1-a | RUNNING |                | 192.168.2.31 |
 | fhmcn5jrvdbdgudn914o | kibana        | ru-central1-a | RUNNING | 158.160.106.99 | 192.168.1.21 |
-| fhmehvfob3qiqp5mg4m1 | nat-gateway   | ru-central1-a | RUNNING | 158.160.54.161 | 192.168.1.10 |
 | fhms9f2ve6rteb84btnv | zabbix        | ru-central1-a | RUNNING | 158.160.49.47  | 192.168.1.35 |
 +----------------------+---------------+---------------+---------+----------------+--------------+
 ```
@@ -948,7 +888,415 @@ ssh web2 curl -s ifconfig.me
 ```
 Вывод:
 ```bash
-158.160.54.161
+51.250.53.62
 ```
+
+</details>
+
+<details>
+
+<summary> Этап 4: Развёртывание Nginx и Application Load Balancer (ALB) </summary>
+
+На данном этапе создаётся простой сайт и проводится развёртывание и настройка виртуальных машин Nginx и ALB.
+1. **Создание логики групп хостов**
+  - hosts.yml:
+```yaml
+all:
+  children:
+    webservers:
+      hosts:
+        web1:
+        web2:
+```
+2. **Создание простого сайта**
+  - index.html:
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Netology Diploma</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <h1>Site for Netology Diploma by Shekov D.V.</h1>
+    <p>And there's some text just to fill the emptiness.</p>
+    <p>Ah, yea! Look at this pale blue background! Relaxing, isn't it?</p>
+</body>
+</html>
+```
+  - styles.css:
+```css
+body {
+    background-color: lightblue;
+    font-family: Arial, sans-serif;
+    text-align: center;
+    margin: 50px;
+}
+h1 {
+    color: navy;
+}
+p {
+    font-size: 18px;
+    color: black;
+}
+```
+3. **Деплой Nginx и сайта**
+  - bastion-config.sh (переписан):
+```bash
+#!/bin/bash
+
+# Обновляем IP из Terraform
+BASTION_IP=$(terraform output -raw bastion_ip 2>/dev/null || echo "")
+WEB1_IP=$(terraform output -raw web1_ip 2>/dev/null || echo "")
+WEB2_IP=$(terraform output -raw web2_ip 2>/dev/null || echo "")
+
+# Обновляем .ssh/config
+cat > ~/.ssh/config << EOF
+Host bastion
+    HostName $BASTION_IP
+    User ubuntu
+    Port 22
+    IdentityFile ~/.ssh/id_rsa
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+
+Host web1 web2 elasticsearch zabbix kibana
+    User ubuntu
+    ProxyJump bastion
+    IdentityFile ~/.ssh/id_rsa
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+EOF
+
+# Удаляем старые записи из known_hosts
+ssh-keygen -R "$BASTION_IP" 2>/dev/null || true
+ssh-keygen -R "$WEB1_IP" 2>/dev/null || true
+ssh-keygen -R "$WEB2_IP" 2>/dev/null || true
+ssh-keygen -R web1 2>/dev/null || true
+ssh-keygen -R web2 2>/dev/null || true
+
+echo "SSH config и known_hosts обновлены"
+echo "  bastion → $BASTION_IP"
+echo "  web1    → $WEB1_IP"
+echo "  web2    → $WEB2_IP"
+```
+
+  - web-servers.yml:
+```yaml
+---
+---
+- name: Деплой Nginx и сайта
+  hosts: webservers
+  become: yes
+
+  handlers:
+    - name: Restart Nginx
+      service:
+        name: nginx
+        state: restarted
+
+  tasks:
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: present
+        update_cache: yes
+
+    - name: Copy index.html
+      copy:
+        src: ~/netology-diploma/ansible/files/index.html
+        dest: /var/www/html/index.html
+        mode: '0644'
+      notify: Restart Nginx
+
+    - name: Copy styles.css
+      copy:
+        src: ~/netology-diploma/ansible/files/styles.css
+        dest: /var/www/html/styles.css
+        mode: '0644'
+      notify: Restart Nginx
+
+    - name: Ensure Nginx started
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+```
+`Примечание:` Использование полных путей в `src` - не лучший подход, но в данном случае он был необходим.
+              Данный скрипт запускается из-под Terraform, и мне не удалось подобрать для него верный относительный адрес. 
+4. **Развёртывание ALB**
+  - update-inventory.sh (для provisioners.tf):
+```bash
+#!/bin/bash
+WEB1_IP=$(terraform output -raw web1_ip)
+WEB2_IP=$(terraform output -raw web2_ip)
+
+cat > ~/netology-diploma/ansible/inventory.ini << EOF
+[webservers]
+web1 ansible_host=$WEB1_IP
+web2 ansible_host=$WEB2_IP
+
+[webservers:vars]
+ansible_user=ubuntu
+ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ProxyJump=bastion'
+EOF
+```
+  - provisioners.tf (ALB необходим рабочий сайт):
+```hcl
+resource "null_resource" "deploy_nginx" {
+  triggers = {
+    web1_id = yandex_compute_instance.web["web1"].id
+    web2_id = yandex_compute_instance.web["web2"].id
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      # Обновляем SSH и inventory
+      ./bastion-config.sh
+      ./update-inventory.sh
+
+      # Ожидаем "поднятия" Nginx
+      sleep 30
+
+      # Запускаем Ansible
+      cd ${path.module}/../ansible
+      ansible-playbook -i inventory.ini --inventory hosts.yml playbooks/web-servers.yml
+    EOT
+    interpreter = ["/bin/bash", "-c"]
+  }
+
+  depends_on = [
+    yandex_compute_instance.web,
+    yandex_compute_instance.bastion
+  ]
+}
+```
+  - alb.tf:
+```yaml
+# Target Group
+resource "yandex_alb_target_group" "web" {
+  name = "web-target-group"
+
+  target {
+    subnet_id  = yandex_vpc_subnet.private_a.id
+    ip_address = yandex_compute_instance.web["web1"].network_interface.0.ip_address
+  }
+
+  target {
+    subnet_id  = yandex_vpc_subnet.private_b.id
+    ip_address = yandex_compute_instance.web["web2"].network_interface.0.ip_address
+  }
+
+  depends_on = [yandex_vpc_security_group.web]
+}
+
+# Backend Group
+resource "yandex_alb_backend_group" "web" {
+  name = "web-backend-group"
+
+  http_backend {
+    name             = "web-backend"
+    port             = 80
+    target_group_ids = [yandex_alb_target_group.web.id]
+
+    healthcheck {
+      timeout             = "5s"
+      interval            = "5s"
+      healthy_threshold   = 2
+      unhealthy_threshold = 2
+      http_healthcheck {
+        path = "/"
+      }
+    }
+  }
+
+  depends_on = [yandex_alb_target_group.web]
+}
+
+# HTTP Router
+resource "yandex_alb_http_router" "web" {
+  name = "web-router"
+}
+
+resource "yandex_alb_virtual_host" "web" {
+  name           = "web-virtual-host"
+  http_router_id = yandex_alb_http_router.web.id
+  route {
+    name = "root"
+    http_route {
+      http_match {
+        path {
+          prefix = "/"
+        }
+      }
+      http_route_action {
+        backend_group_id = yandex_alb_backend_group.web.id
+        timeout          = "5s"
+      }
+    }
+  }
+}
+
+# ALB
+resource "yandex_alb_load_balancer" "web" {
+  name        = "web-alb"
+  network_id  = yandex_vpc_network.diploma.id
+
+  allocation_policy {
+    location {
+      zone_id   = "ru-central1-a"
+      subnet_id = yandex_vpc_subnet.public.id
+    }
+  }
+
+  listener {
+    name = "http-listener"
+    endpoint {
+      address {
+        external_ipv4_address {}
+      }
+      ports = [80]
+    }
+    http {
+      handler {
+        http_router_id = yandex_alb_http_router.web.id
+      }
+    }
+  }
+
+  security_group_ids = [yandex_vpc_security_group.alb.id]
+
+  depends_on         = [null_resource.deploy_nginx, yandex_alb_virtual_host.web]
+}
+```
+  - security_groups.tf:
+```yaml
+  # добавить в блок web-sg после HTTP from ALB
+  ingress {
+    protocol          = "Any"
+    description       = "Health checks from Yandex"
+    predefined_target = "loadbalancer_healthchecks"
+    port              = 80
+  }
+
+  # добавить в блок alb
+  ingress {
+    protocol          = "tcp"
+    description       = "ALB Health Checks"
+    predefined_target = "loadbalancer_healthchecks"
+    port              = 80
+  }
+```
+  - outputs.tf (добавлено):
+```yaml
+output "alb_ip" {
+  value = yandex_alb_load_balancer.web.listener[0].endpoint[0].address[0].external_ipv4_address[0].address
+  description = "Public IP of Application Load Balancer"
+}
+```
+
+5. **Деплой и тестирование**
+  - Инициализация, планирование и деплой:
+```bash
+cd terraform
+terraform fmt
+terraform validate
+terraform plan
+terraform apply
+```
+Вывод:
+```bash
+Apply complete! Resources: 24 added, 0 changed, 0 destroyed.
+
+Outputs:
+
+alb_ip = "158.160.155.41"
+bastion_ip = "89.169.159.53"
+elasticsearch_ip = "192.168.2.12"
+private_subnet_a_id = "e9bk4iq7h4cj5tafr2jl"
+private_subnet_b_id = "e2lgk3543ceplctvjsvf"
+public_subnet_id = "e9bnp85jpsa8hdedljjh"
+vpc_id = "enpjcf9clf2hj4de6kcm"
+web1_ip = "192.168.2.9"
+web2_ip = "192.168.3.19"
+```
+  - Проверка Nginx:
+```bash
+ssh web1 "sudo systemctl is-active nginx" && echo "web1: OK"
+ssh web2 "sudo systemctl is-active nginx" && echo "web2: OK"
+```
+Вывод:
+```bash
+active
+web1: OK
+active
+web2: OK
+```
+  - Проверка порта 80:
+```bash
+ssh web1 "sudo ss -tlnp | grep :80"
+ssh web2 "sudo ss -tlnp | grep :80"
+```
+Вывод:
+```bash
+LISTEN 0      511          0.0.0.0:80        0.0.0.0:*    users:(("nginx",pid=1995,fd=6),("nginx",pid=1994,fd=6),("nginx",pid=1993,fd=6))
+LISTEN 0      511             [::]:80           [::]:*    users:(("nginx",pid=1995,fd=7),("nginx",pid=1994,fd=7),("nginx",pid=1993,fd=7))
+LISTEN 0      511          0.0.0.0:80        0.0.0.0:*    users:(("nginx",pid=1996,fd=6),("nginx",pid=1995,fd=6),("nginx",pid=1994,fd=6))
+LISTEN 0      511             [::]:80           [::]:*    users:(("nginx",pid=1996,fd=7),("nginx",pid=1995,fd=7),("nginx",pid=1994,fd=7))
+```
+  - Проверка сайтов:
+```bash
+ssh web1 "echo -e 'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n' | sudo nc -w 3 localhost 80"
+ssh web2 "echo -e 'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n' | sudo nc -w 3 localhost 80"
+```
+Вывод (одинаков для обоих серверов):
+```bash
+HTTP/1.1 200 OK
+Server: nginx/1.18.0 (Ubuntu)
+Date: Sun, 02 Nov 2025 12:35:09 GMT
+Content-Type: text/html
+Content-Length: 444
+Last-Modified: Sun, 02 Nov 2025 12:24:47 GMT
+Connection: keep-alive
+ETag: "69074d8f-1bc"
+Accept-Ranges: bytes
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Netology Diploma</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <h1>Site for Netology Diploma by Shekov D.V.</h1>
+    <p>And there's some text just to fill the emptiness.</p>
+    <p>Ah, yea! Look at this pale blue background! Relaxing, isn't it?</p>
+</body>
+```
+  - Проверка ALB:
+```bash
+ALB_IP=$(terraform output -raw alb_ip)
+for i in {1..5}; do
+  curl -s http://$ALB_IP | grep "Сервер" | sed "s/.*<strong>\(.*\)<\/strong>.*/\1/"
+done
+```
+Вывод:
+```bash
+
+```
+  - Проверка балансировки:
+```bash
+for i in {1..5}; do curl -s http://$ALB_IP | grep "Сервер"; done
+```
+Вывод:
+```bash
+
+```
+`
+`Примечание:` На данный момент наблюдается проблема с настройкой ALB, в следствие чего не происходит перенаправления на web-серверы при обращени к IP ALB, а кроме того не происходит проверки healthcheck. Проблема решается.
 
 </details>

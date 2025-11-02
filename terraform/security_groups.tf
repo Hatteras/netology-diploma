@@ -25,7 +25,7 @@ resource "yandex_vpc_security_group" "web" {
   ingress {
     protocol          = "tcp"
     description       = "HTTP from ALB"
-    security_group_id = yandex_vpc_security_group.alb.id
+    predefined_target = "loadbalancer_healthchecks"
     port              = 80
   }
 
@@ -130,6 +130,12 @@ resource "yandex_vpc_security_group" "alb" {
     description    = "HTTP"
     v4_cidr_blocks = ["0.0.0.0/0"]
     port           = 80
+  }
+
+  ingress {
+    protocol          = "any"
+    description       = "ALB Health Checks"
+    predefined_target = "loadbalancer_healthchecks"
   }
 
   egress {
