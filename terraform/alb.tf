@@ -23,7 +23,7 @@ resource "yandex_alb_backend_group" "web" {
     name             = "web-backend"
     port             = 80
     target_group_ids = [yandex_alb_target_group.web.id]
-    
+
     load_balancing_config {
       panic_threshold = 50
     }
@@ -33,6 +33,7 @@ resource "yandex_alb_backend_group" "web" {
       interval            = "5s"
       healthy_threshold   = 2
       unhealthy_threshold = 2
+      healthcheck_port    = 80
       http_healthcheck {
         path = "/"
       }
@@ -73,8 +74,14 @@ resource "yandex_alb_load_balancer" "web" {
 
   allocation_policy {
     location {
+      disable_traffic = false
       zone_id   = "ru-central1-a"
-      subnet_id = yandex_vpc_subnet.public.id
+      subnet_id = yandex_vpc_subnet.private_a.id
+    }
+    location {
+      disable_traffic = false
+      zone_id   = "ru-central1-b"
+      subnet_id = yandex_vpc_subnet.private_b.id
     }
   }
 
@@ -95,5 +102,5 @@ resource "yandex_alb_load_balancer" "web" {
 
   security_group_ids = [yandex_vpc_security_group.alb.id]
 
-  depends_on         = [null_resource.deploy_nginx, yandex_alb_virtual_host.web]
-  }
+  depends_on = [null_resource.deploy_nginx, yandex_alb_virtual_host.web]
+}

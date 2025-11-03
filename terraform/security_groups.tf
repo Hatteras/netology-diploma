@@ -23,7 +23,7 @@ resource "yandex_vpc_security_group" "web" {
   network_id = yandex_vpc_network.diploma.id
 
   ingress {
-    protocol          = "tcp"
+    protocol          = "any"
     description       = "HTTP from ALB"
     predefined_target = "loadbalancer_healthchecks"
     port              = 80
@@ -43,6 +43,13 @@ resource "yandex_vpc_security_group" "web" {
     port              = 10050
   }
 
+  ingress {
+    protocol       = "any"
+    from_port      = 0
+    to_port        = 65535
+    v4_cidr_blocks = ["0.0.0.0/0"]
+  }
+  
   egress {
     protocol       = "any"
     v4_cidr_blocks = ["0.0.0.0/0"]
@@ -126,7 +133,7 @@ resource "yandex_vpc_security_group" "alb" {
   network_id = yandex_vpc_network.diploma.id
 
   ingress {
-    protocol       = "tcp"
+    protocol       = "any"
     description    = "HTTP"
     v4_cidr_blocks = ["0.0.0.0/0"]
     port           = 80

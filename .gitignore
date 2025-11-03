@@ -4,6 +4,7 @@
 terraform.tfstate
 .terraform.tfstate.*
 terraform.tfvars
+terraform.tfstate.*
 
 # Secrets
 *.pem
@@ -13,3 +14,4 @@ terraform.tfvars
 # Локальные файлы
 *.log
 *.tmp
+*.backup

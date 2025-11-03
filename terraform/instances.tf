@@ -30,7 +30,7 @@ resource "yandex_compute_instance" "bastion" {
   }
 
   metadata = {
-    ssh-keys = "ubuntu:${file("~/.ssh/id_rsa.pub")}"
+    ssh-keys = "ubuntu:${file("~/.ssh/id_rsa.pub")}\nubuntu:${file("~/.ssh/emis_id_ed25519.pub")}}"
   }
 
   scheduling_policy {
@@ -71,7 +71,7 @@ resource "yandex_compute_instance" "web" {
   }
 
   metadata = {
-    ssh-keys = "ubuntu:${file("~/.ssh/id_rsa.pub")}"
+    ssh-keys = "ubuntu:${file("~/.ssh/id_rsa.pub")}\nubuntu:${file("~/.ssh/emis_id_ed25519.pub")}}"
   }
 
   scheduling_policy {
@@ -108,7 +108,7 @@ resource "yandex_compute_instance" "zabbix" {
   }
 
   metadata = {
-    ssh-keys = "ubuntu:${file("~/.ssh/id_rsa.pub")}"
+    ssh-keys = "ubuntu:${file("~/.ssh/id_rsa.pub")}\nubuntu:${file("~/.ssh/emis_id_ed25519.pub")}}"
   }
 
   scheduling_policy {
@@ -144,7 +144,7 @@ resource "yandex_compute_instance" "elasticsearch" {
   }
 
   metadata = {
-    ssh-keys = "ubuntu:${file("~/.ssh/id_rsa.pub")}"
+    ssh-keys = "ubuntu:${file("~/.ssh/id_rsa.pub")}\nubuntu:${file("~/.ssh/emis_id_ed25519.pub")}}"
   }
 
   scheduling_policy {
@@ -181,7 +181,7 @@ resource "yandex_compute_instance" "kibana" {
   }
 
   metadata = {
-    ssh-keys = "ubuntu:${file("~/.ssh/id_rsa.pub")}"
+    ssh-keys = "ubuntu:${file("~/.ssh/id_rsa.pub")}\nubuntu:${file("~/.ssh/emis_id_ed25519.pub")}}"
   }
 
   scheduling_policy {

@@ -315,7 +315,7 @@ resource "yandex_vpc_security_group" "web" {
   network_id = yandex_vpc_network.diploma.id
 
   ingress {
-    protocol          = "tcp"
+    protocol          = "any"
     description       = "HTTP from ALB"
     security_group_id = yandex_vpc_security_group.alb.id
     port              = 80
@@ -333,6 +333,13 @@ resource "yandex_vpc_security_group" "web" {
     description       = "Zabbix Agent"
     security_group_id = yandex_vpc_security_group.zabbix.id
     port              = 10050
+  }
+
+  ingress {
+    protocol       = "any"
+    from_port      = 0
+    to_port        = 65535
+    v4_cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
@@ -418,7 +425,7 @@ resource "yandex_vpc_security_group" "alb" {
   network_id = yandex_vpc_network.diploma.id
 
   ingress {
-    protocol       = "tcp"
+    protocol       = "any"
     description    = "HTTP"
     v4_cidr_blocks = ["0.0.0.0/0"]
     port           = 80
@@ -1141,13 +1148,19 @@ resource "yandex_alb_virtual_host" "web" {
 
 # ALB
 resource "yandex_alb_load_balancer" "web" {
-  name        = "web-alb"
-  network_id  = yandex_vpc_network.diploma.id
+  name       = "web-alb"
+  network_id = yandex_vpc_network.diploma.id
 
   allocation_policy {
     location {
+      disable_traffic = false
       zone_id   = "ru-central1-a"
-      subnet_id = yandex_vpc_subnet.public.id
+      subnet_id = yandex_vpc_subnet.private_a.id
+    }
+    location {
+      disable_traffic = false
+      zone_id   = "ru-central1-b"
+      subnet_id = yandex_vpc_subnet.private_b.id
     }
   }
 
@@ -1277,26 +1290,49 @@ Accept-Ranges: bytes
     <p>Ah, yea! Look at this pale blue background! Relaxing, isn't it?</p>
 </body>
 ```
-  - Проверка ALB:
-```bash
-ALB_IP=$(terraform output -raw alb_ip)
-for i in {1..5}; do
-  curl -s http://$ALB_IP | grep "Сервер" | sed "s/.*<strong>\(.*\)<\/strong>.*/\1/"
-done
-```
-Вывод:
-```bash
+  - Проверка healthcheck:
 
-```
+![hc_status](./img/hc_status.png)
+  - Проверка балансировщика:
+
+![bal_answer](./img/bal_answer.png)
   - Проверка балансировки:
 ```bash
-for i in {1..5}; do curl -s http://$ALB_IP | grep "Сервер"; done
+for i in {1..5}; do
+  echo "Запрос $i"
+  curl -s http://$ALB_IP
+done
+ssh web1 "sudo tail -n 10 /var/log/nginx/access.log"
+ssh web2 "sudo tail -n 10 /var/log/nginx/access.log"
 ```
-Вывод:
-```bash
+Вывод (без вывода содержимого сайта):
 
+web1:
+```bash
+192.168.3.23 - - [03/Nov/2025:12:10:15 +0000] "GET / HTTP/1.1" 200 444 "-" "Envoy/HC"
+192.168.3.34 - - [03/Nov/2025:12:10:16 +0000] "GET / HTTP/1.1" 200 444 "-" "Envoy/HC"
+192.168.2.28 - - [03/Nov/2025:12:10:18 +0000] "GET / HTTP/1.1" 200 444 "-" "Envoy/HC"
+192.168.2.4 - - [03/Nov/2025:12:10:19 +0000] "GET / HTTP/1.1" 200 444 "-" "Envoy/HC"
+192.168.2.4 - - [03/Nov/2025:12:10:19 +0000] "GET / HTTP/1.1" 200 444 "-" "curl/8.5.0"
+192.168.3.34 - - [03/Nov/2025:12:10:20 +0000] "GET / HTTP/1.1" 200 444 "-" "curl/8.5.0"
+192.168.2.28 - - [03/Nov/2025:12:10:20 +0000] "GET / HTTP/1.1" 200 444 "-" "curl/8.5.0"
+192.168.3.23 - - [03/Nov/2025:12:10:20 +0000] "GET / HTTP/1.1" 200 444 "-" "Envoy/HC"
+192.168.3.34 - - [03/Nov/2025:12:10:21 +0000] "GET / HTTP/1.1" 200 444 "-" "Envoy/HC"
+192.168.2.28 - - [03/Nov/2025:12:10:23 +0000] "GET / HTTP/1.1" 200 444 "-" "Envoy/HC"
 ```
-`
-`Примечание:` На данный момент наблюдается проблема с настройкой ALB, в следствие чего не происходит перенаправления на web-серверы при обращени к IP ALB, а кроме того не происходит проверки healthcheck. Проблема решается.
+web2:
+```bash
+192.168.2.28 - - [03/Nov/2025:12:10:19 +0000] "GET / HTTP/1.1" 200 444 "-" "Envoy/HC"
+192.168.3.34 - - [03/Nov/2025:12:10:19 +0000] "GET / HTTP/1.1" 200 444 "-" "Envoy/HC"
+192.168.3.23 - - [03/Nov/2025:12:10:19 +0000] "GET / HTTP/1.1" 200 444 "-" "Envoy/HC"
+192.168.2.28 - - [03/Nov/2025:12:10:20 +0000] "GET / HTTP/1.1" 200 444 "-" "curl/8.5.0"
+192.168.2.28 - - [03/Nov/2025:12:10:20 +0000] "GET / HTTP/1.1" 200 444 "-" "curl/8.5.0"
+192.168.2.4 - - [03/Nov/2025:12:10:20 +0000] "GET / HTTP/1.1" 200 444 "-" "Envoy/HC"
+192.168.2.28 - - [03/Nov/2025:12:10:24 +0000] "GET / HTTP/1.1" 200 444 "-" "Envoy/HC"
+192.168.3.34 - - [03/Nov/2025:12:10:24 +0000] "GET / HTTP/1.1" 200 444 "-" "Envoy/HC"
+192.168.3.23 - - [03/Nov/2025:12:10:24 +0000] "GET / HTTP/1.1" 200 444 "-" "Envoy/HC"
+192.168.2.4 - - [03/Nov/2025:12:10:25 +0000] "GET / HTTP/1.1" 200 444 "-" "Envoy/HC"
+```
+Можно видеть, что запрос curl попал на оба сервера - значит, балансировка работает.
 
 </details>
