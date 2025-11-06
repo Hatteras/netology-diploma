@@ -1,0 +1,181 @@
+---
+- name: Deploy Zabbix Server on Ubuntu 22.04
+  hosts: zabbix
+  become: yes
+  vars:
+    zabbix_db_user: "zabbix"
+    zabbix_db_name: "zabbix"
+    zabbix_db_password: "zabbix_pass"
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Full system upgrade (resolve dependencies)
+      apt:
+        upgrade: dist
+        update_cache: yes
+
+    - name: Fix broken packages (if any)
+      apt:
+        name: '*'
+        state: latest
+        force: yes
+
+    - name: Add official Zabbix repository
+      apt:
+        deb: https://repo.zabbix.com/zabbix/6.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_6.0-4+ubuntu22.04_all.deb
+        state: present
+
+    - name: Update apt cache after repo
+      apt:
+        update_cache: yes
+
+    - name: Install Zabbix server, frontend, agent and dependencies
+      apt:
+        name:
+          - zabbix-server-pgsql
+          - zabbix-frontend-php
+          - postgresql
+          - php8.1-pgsql
+          - php8.1-mbstring
+          - php8.1-gd
+          - php8.1-ldap
+          - php8.1-xml
+          - php8.1-bcmath
+          - libapache2-mod-php8.1
+          - zabbix-apache-conf
+          - zabbix-sql-scripts
+          - zabbix-agent
+          - apache2
+        state: present
+
+    - name: Add PHP PDO PostgreSQL extension to php.ini
+      lineinfile:
+        path: /etc/php/8.1/apache2/php.ini
+        regexp: '^;extension=pdo_pgsql'
+        line: 'extension=pdo_pgsql'
+      notify: Restart Apache2
+
+    - name: Add PHP PostgreSQL extension to php.ini
+      lineinfile:
+        path: /etc/php/8.1/apache2/php.ini
+        regexp: '^;extension=pgsql'
+        line: 'extension=pgsql'
+      notify: Restart Apache2
+
+    - name: Enable PHP 8.1 module in Apache
+      apache2_module:
+        name: php8.1
+        state: present
+      notify: Restart Apache2
+    
+    - name: Restart Apache to load PHP
+      service:
+        name: apache2
+        state: restarted
+
+    - name: Ensure PostgreSQL is running
+      service:
+        name: postgresql
+        state: started
+        enabled: yes
+
+    - name: Create Zabbix DB user (shell)
+      shell: sudo -u postgres psql -c "CREATE USER zabbix WITH PASSWORD '{{ zabbix_db_password }}' LOGIN;"
+      args:
+        creates: /etc/zabbix/.zabbix_user_created
+      register: db_user_result
+      ignore_errors: yes
+
+    - name: Mark Zabbix DB user created (if success)
+      file:
+        path: /etc/zabbix/.zabbix_user_created
+        state: touch
+      when: db_user_result.rc == 0
+
+    - name: Create Zabbix DB (shell)
+      shell: sudo -u postgres psql -c "CREATE DATABASE zabbix OWNER zabbix;"
+      args:
+        creates: /etc/zabbix/.zabbix_db_created
+      register: db_result
+      ignore_errors: yes
+
+    - name: Mark Zabbix DB created (if success)
+      file:
+        path: /etc/zabbix/.zabbix_db_created
+        state: touch
+      when: db_result.rc == 0
+
+    - name: Import initial Zabbix schema (shell)
+      shell: |
+        set -e
+        zcat /usr/share/zabbix-sql-scripts/postgresql/server.sql.gz | \
+        sudo -u postgres psql -v ON_ERROR_STOP=1 zabbix
+      args:
+        creates: /etc/zabbix/.zabbix_schema_imported
+      register: schema_result
+      ignore_errors: yes
+
+    - name: Mark Zabbix schema imported (if success)
+      file:
+        path: /etc/zabbix/.zabbix_schema_imported
+        state: touch
+      when: schema_result.rc == 0
+
+    - name: Configure Zabbix server DB connection
+      lineinfile:
+        path: /etc/zabbix/zabbix_server.conf
+        regexp: '^DBPassword='
+        line: "DBPassword={{ zabbix_db_password }}"
+      notify: Restart Zabbix Server
+
+    - name: Ensure correct permissions on zabbix_server.conf
+      file:
+        path: /etc/zabbix/zabbix_server.conf
+        owner: root
+        group: zabbix
+        mode: '0640'
+
+    - name: Ensure DBHost is set to localhost in Zabbix server config
+      lineinfile:
+        path: /etc/zabbix/zabbix_server.conf
+        regexp: '^DBHost='
+        line: 'DBHost=localhost'
+        state: present
+      notify: Restart Zabbix Server
+
+    - name: Set PHP timezone to Moscow
+      lineinfile:
+        path: /etc/php/8.1/apache2/php.ini
+        regexp: '^;?date.timezone ='
+        line: 'date.timezone = Europe/Moscow'
+      notify: Restart Apache2
+
+    - name: Start and enable services
+      service:
+        name: "{{ item }}"
+        state: started
+        enabled: yes
+      loop:
+        - apache2
+        - zabbix-server
+        - zabbix-agent
+
+  post_tasks:
+    - name: Clean up deb package
+      file:
+        path: /tmp/zabbix-release_6.0-4+ubuntu22.04_all.deb
+        state: absent
+
+  handlers:
+    - name: Restart Zabbix Server
+      service:
+        name: zabbix-server
+        state: restarted
+
+    - name: Restart Apache2
+      service:
+        name: apache2
+        state: restarted

@@ -1,12 +1,14 @@
 #!/bin/bash
 
-# Обновляем IP из Terraform
-BASTION_IP=$(terraform output -raw bastion_ip 2>/dev/null || echo "")
-WEB1_IP=$(terraform output -raw web1_ip 2>/dev/null || echo "")
-WEB2_IP=$(terraform output -raw web2_ip 2>/dev/null || echo "")
+BASTION_IP=$(terraform output -raw bastion_ip)
+WEB1_IP=$(terraform output -raw web1_ip)
+WEB2_IP=$(terraform output -raw web2_ip)
+ELASTIC_IP=$(terraform output -raw elasticsearch_ip)
+KIBANA_IP=$(terraform output -raw kibana_ip)
+ZABBIX_IP=$(terraform output -raw zabbix_ip)
 
-# Обновляем .ssh/config
 cat > ~/.ssh/config << EOF
+# Bastion
 Host bastion
     HostName $BASTION_IP
     User ubuntu
@@ -15,22 +17,36 @@ Host bastion
     StrictHostKeyChecking no
     UserKnownHostsFile /dev/null
 
-Host web1 web2 elasticsearch zabbix kibana
+# Private servers (ProxyJump bastion)
+Host web1 web2 elasticsearch
+    HostName $WEB1_IP  # Для web1, web2, elastic — IP из переменных
     User ubuntu
     ProxyJump bastion
     IdentityFile ~/.ssh/id_rsa
     StrictHostKeyChecking no
     UserKnownHostsFile /dev/null
+
+# Public servers (direct SSH)
+Host kibana
+    HostName $KIBANA_IP
+    User ubuntu
+    Port 22
+    IdentityFile ~/.ssh/id_rsa
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+
+Host zabbix
+    HostName $ZABBIX_IP
+    User ubuntu
+    Port 22
+    IdentityFile ~/.ssh/id_rsa
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
 EOF
 
-# Удаляем старые записи из known_hosts
 ssh-keygen -R "$BASTION_IP" 2>/dev/null || true
 ssh-keygen -R "$WEB1_IP" 2>/dev/null || true
 ssh-keygen -R "$WEB2_IP" 2>/dev/null || true
-ssh-keygen -R web1 2>/dev/null || true
-ssh-keygen -R web2 2>/dev/null || true
-
-echo "SSH config и known_hosts обновлены"
-echo "  bastion → $BASTION_IP"
-echo "  web1    → $WEB1_IP"
-echo "  web2    → $WEB2_IP"
+ssh-keygen -R "$ELASTIC_IP" 2>/dev/null || true
+ssh-keygen -R "$KIBANA_IP" 2>/dev/null || true
+ssh-keygen -R "$ZABBIX_IP" 2>/dev/null || true

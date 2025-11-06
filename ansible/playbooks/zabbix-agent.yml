@@ -1,0 +1,58 @@
+---
+- name: Deploy Zabbix Agent on Ubuntu 22.04
+  hosts: all:!zabbix  # Кроме сервера
+  become: yes
+  vars:
+    zabbix_server: "zabbix.ru-central1.internal"
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install wget if not present
+      apt:
+        name: wget
+        state: present
+
+    - name: Download Zabbix release package
+      apt:
+        deb: https://repo.zabbix.com/zabbix/6.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest_6.0+ubuntu22.04_all.deb
+        state: present
+
+    - name: Update apt cache after repo
+      apt:
+        update_cache: yes
+
+    - name: Install Zabbix Agent
+      apt:
+        name: zabbix-agent
+        state: present
+
+    - name: Remove all existing Server/ServerActive/Hostname lines
+      lineinfile:
+        path: /etc/zabbix/zabbix_agentd.conf
+        regexp: '^#?Server(Active)?=|^Hostname='
+        state: absent
+
+    - name: Add clean Server, ServerActive and Hostname lines
+      lineinfile:
+        path: /etc/zabbix/zabbix_agentd.conf
+        line: "{{ item }}"
+        state: present
+      loop:
+        - "Server={{ zabbix_server }}"
+        - "ServerActive={{ zabbix_server }}"
+        - "Hostname={{ inventory_hostname }}"
+
+    - name: Restart and enable Zabbix Agent
+      service:
+        name: zabbix-agent
+        state: restarted
+        enabled: yes
+
+  post_tasks:
+    - name: Clean up deb package
+      file:
+        path: /tmp/zabbix-release_latest_6.0+ubuntu22.04_all.deb
+        state: absent

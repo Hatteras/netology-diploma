@@ -75,13 +75,13 @@ resource "yandex_alb_load_balancer" "web" {
   allocation_policy {
     location {
       disable_traffic = false
-      zone_id   = "ru-central1-a"
-      subnet_id = yandex_vpc_subnet.private_a.id
+      zone_id         = "ru-central1-a"
+      subnet_id       = yandex_vpc_subnet.private_a.id
     }
     location {
       disable_traffic = false
-      zone_id   = "ru-central1-b"
-      subnet_id = yandex_vpc_subnet.private_b.id
+      zone_id         = "ru-central1-b"
+      subnet_id       = yandex_vpc_subnet.private_b.id
     }
   }
 

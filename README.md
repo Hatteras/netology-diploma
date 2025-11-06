@@ -994,7 +994,7 @@ echo "  web2    → $WEB2_IP"
 ```yaml
 ---
 ---
-- name: Деплой Nginx и сайта
+- name: Nginx and site deploy
   hosts: webservers
   become: yes
 
@@ -1334,5 +1334,705 @@ web2:
 192.168.2.4 - - [03/Nov/2025:12:10:25 +0000] "GET / HTTP/1.1" 200 444 "-" "Envoy/HC"
 ```
 Можно видеть, что запрос curl попал на оба сервера - значит, балансировка работает.
+
+</details>
+
+<details>
+
+<summary> Этап 5: Установка и настройка Zabbix и Zabbix Agent'ов </summary>
+
+На данном этапе проводится установка Zabbix (непосредственно Zabbix, Apache и PostgreSQL) на соответствующую виртуальную машину, его настройка, а аткже установка Zabbix Agent'ов на все виртуальные машины.
+
+Поскольку, начиная с данного этапа, сервисы требуют внутренней настройки, виртуальные машины переведены в неостанавливаемый формат (preemptible = false).
+
+1. **Донастройка SG**
+  - security_groups.tf:
+```hcl
+# Бастион-хост: только SSH
+resource "yandex_vpc_security_group" "bastion" {
+  name       = "bastion-sg"
+  network_id = yandex_vpc_network.diploma.id
+
+  ingress {
+    protocol       = "tcp"
+    description    = "SSH"
+    v4_cidr_blocks = [var.my_ip] # Переменная хранится в terraform.tfvars
+    port           = 22
+  }
+
+  ingress {
+    protocol          = "tcp"
+    description       = "Zabbix Agent"
+    security_group_id = yandex_vpc_security_group.zabbix.id
+    port              = 10050
+  }
+
+  egress {
+    protocol       = "any"
+    description    = "All outbound"
+    v4_cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# Веб-серверы
+resource "yandex_vpc_security_group" "web" {
+  name       = "web-sg"
+  network_id = yandex_vpc_network.diploma.id
+
+  ingress {
+    protocol          = "any"
+    description       = "HTTP from ALB"
+    predefined_target = "loadbalancer_healthchecks"
+    port              = 80
+  }
+
+  ingress {
+    protocol          = "tcp"
+    description       = "SSH from bastion"
+    security_group_id = yandex_vpc_security_group.bastion.id
+    port              = 22
+  }
+
+  ingress {
+    protocol          = "tcp"
+    description       = "Zabbix Agent"
+    security_group_id = yandex_vpc_security_group.zabbix.id
+    port              = 10050
+  }
+  
+  # Временное правило: позволяет ALB работать.
+  # Без него health checks не проходят, несмотря на наличие predefined_target.
+  # На реальном проде - найти причину и немедленно заменить на конкретные диапазоны!
+  ingress {
+    protocol       = "any"
+    from_port      = 0
+    to_port        = 65535
+    v4_cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    protocol       = "any"
+    v4_cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# Zabbix
+resource "yandex_vpc_security_group" "zabbix" {
+  name       = "zabbix-sg"
+  network_id = yandex_vpc_network.diploma.id
+
+  ingress {
+    protocol       = "tcp"
+    description    = "SSH"
+    v4_cidr_blocks = [var.my_ip]
+    port           = 22
+  }
+
+  ingress {
+    protocol    = "tcp"
+    description = "Zabbix Server from agents"
+    v4_cidr_blocks = [
+      var.private_subnet_a_cidr,
+      var.private_subnet_b_cidr
+    ]
+    port = 10051
+  }
+
+  ingress {
+    protocol       = "tcp"
+    description    = "Zabbix Web UI"
+    v4_cidr_blocks = ["0.0.0.0/0"]
+    from_port      = 80
+    to_port        = 80
+  }
+
+  ingress {
+    protocol       = "tcp"
+    description    = "Zabbix Web UI HTTPS"
+    v4_cidr_blocks = ["0.0.0.0/0"]
+    from_port      = 443
+    to_port        = 443
+  }
+
+  egress {
+    protocol       = "any"
+    v4_cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# Elasticsearch
+resource "yandex_vpc_security_group" "elasticsearch" {
+  name       = "elasticsearch-sg"
+  network_id = yandex_vpc_network.diploma.id
+
+  ingress {
+    protocol          = "tcp"
+    description       = "SSH from bastion"
+    security_group_id = yandex_vpc_security_group.bastion.id
+    port              = 22
+  }
+
+  ingress {
+    protocol          = "tcp"
+    description       = "From Kibana"
+    security_group_id = yandex_vpc_security_group.kibana.id
+    port              = 9200
+  }
+
+  ingress {
+    protocol          = "tcp"
+    description       = "From Filebeat"
+    security_group_id = yandex_vpc_security_group.web.id
+    port              = 9200
+  }
+
+  ingress {
+    protocol          = "tcp"
+    description       = "Zabbix Agent"
+    security_group_id = yandex_vpc_security_group.zabbix.id
+    port              = 10050
+  }
+
+  egress {
+    protocol       = "any"
+    v4_cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# Kibana
+resource "yandex_vpc_security_group" "kibana" {
+  name       = "kibana-sg"
+  network_id = yandex_vpc_network.diploma.id
+
+  ingress {
+    protocol       = "tcp"
+    description    = "SSH from user"
+    v4_cidr_blocks = [var.my_ip]
+    port           = 22
+  }
+
+  ingress {
+    protocol       = "tcp"
+    description    = "Kibana UI"
+    v4_cidr_blocks = ["0.0.0.0/0"]
+    port           = 5601
+  }
+
+  ingress {
+    protocol          = "tcp"
+    description       = "Zabbix Agent"
+    security_group_id = yandex_vpc_security_group.zabbix.id
+    port              = 10050
+  }
+
+  egress {
+    protocol       = "any"
+    v4_cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# ALB
+resource "yandex_vpc_security_group" "alb" {
+  name       = "alb-sg"
+  network_id = yandex_vpc_network.diploma.id
+
+  ingress {
+    protocol       = "any"
+    description    = "HTTP"
+    v4_cidr_blocks = ["0.0.0.0/0"]
+    port           = 80
+  }
+
+  ingress {
+    protocol          = "any"
+    description       = "ALB Health Checks"
+    predefined_target = "loadbalancer_healthchecks"
+  }
+
+  egress {
+    protocol       = "any"
+    v4_cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+```
+2. **Добавление выходных переменных**
+  - outputs.tf (добавить):
+```hcl
+output "kibana_ip" {
+  value = yandex_compute_instance.kibana.network_interface.0.nat_ip_address
+  description = "Public IP of Kibana VM"
+}
+
+output "zabbix_ip" {
+  value = yandex_compute_instance.zabbix.network_interface.0.nat_ip_address
+  description = "Public IP Zabbix server"
+}
+
+output "zabbix_fqdn" {
+  value = "zabbix.ru-central1-a.internal"
+  description = "FQDN Zabbix server"
+}
+```
+3. **Добавление плейбуков установки Zabbix и Zabbix Agent'ов**
+  - zabbix-server.yml:
+```yaml
+---
+- name: Deploy Zabbix Server on Ubuntu 22.04
+  hosts: zabbix
+  become: yes
+  vars:
+    zabbix_db_user: "zabbix"
+    zabbix_db_name: "zabbix"
+    zabbix_db_password: "zabbix_pass"
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Full system upgrade (resolve dependencies)
+      apt:
+        upgrade: dist
+        update_cache: yes
+
+    - name: Fix broken packages (if any)
+      apt:
+        name: '*'
+        state: latest
+        force: yes
+
+    - name: Add official Zabbix repository
+      apt:
+        deb: https://repo.zabbix.com/zabbix/6.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_6.0-4+ubuntu22.04_all.deb
+        state: present
+
+    - name: Update apt cache after repo
+      apt:
+        update_cache: yes
+
+    - name: Install Zabbix server, frontend, agent and dependencies
+      apt:
+        name:
+          - zabbix-server-pgsql
+          - zabbix-frontend-php
+          - postgresql
+          - php8.1-pgsql
+          - php8.1-mbstring
+          - php8.1-gd
+          - php8.1-ldap
+          - php8.1-xml
+          - php8.1-bcmath
+          - libapache2-mod-php8.1
+          - zabbix-apache-conf
+          - zabbix-sql-scripts
+          - zabbix-agent
+          - apache2
+        state: present
+
+    - name: Add PHP PDO PostgreSQL extension to php.ini
+      lineinfile:
+        path: /etc/php/8.1/apache2/php.ini
+        regexp: '^;extension=pdo_pgsql'
+        line: 'extension=pdo_pgsql'
+      notify: Restart Apache2
+
+    - name: Add PHP PostgreSQL extension to php.ini
+      lineinfile:
+        path: /etc/php/8.1/apache2/php.ini
+        regexp: '^;extension=pgsql'
+        line: 'extension=pgsql'
+      notify: Restart Apache2
+
+    - name: Enable PHP 8.1 module in Apache
+      apache2_module:
+        name: php8.1
+        state: present
+      notify: Restart Apache2
+    
+    - name: Restart Apache to load PHP
+      service:
+        name: apache2
+        state: restarted
+
+    - name: Ensure PostgreSQL is running
+      service:
+        name: postgresql
+        state: started
+        enabled: yes
+
+    - name: Create Zabbix DB user (shell)
+      shell: sudo -u postgres psql -c "CREATE USER zabbix WITH PASSWORD '{{ zabbix_db_password }}' LOGIN;"
+      args:
+        creates: /etc/zabbix/.zabbix_user_created
+      register: db_user_result
+      ignore_errors: yes
+
+    - name: Mark Zabbix DB user created (if success)
+      file:
+        path: /etc/zabbix/.zabbix_user_created
+        state: touch
+      when: db_user_result.rc == 0
+
+    - name: Create Zabbix DB (shell)
+      shell: sudo -u postgres psql -c "CREATE DATABASE zabbix OWNER zabbix;"
+      args:
+        creates: /etc/zabbix/.zabbix_db_created
+      register: db_result
+      ignore_errors: yes
+
+    - name: Mark Zabbix DB created (if success)
+      file:
+        path: /etc/zabbix/.zabbix_db_created
+        state: touch
+      when: db_result.rc == 0
+
+    - name: Import initial Zabbix schema (shell)
+      shell: |
+        set -e
+        zcat /usr/share/zabbix-sql-scripts/postgresql/server.sql.gz | \
+        sudo -u postgres psql -v ON_ERROR_STOP=1 zabbix
+      args:
+        creates: /etc/zabbix/.zabbix_schema_imported
+      register: schema_result
+      ignore_errors: yes
+
+    - name: Mark Zabbix schema imported (if success)
+      file:
+        path: /etc/zabbix/.zabbix_schema_imported
+        state: touch
+      when: schema_result.rc == 0
+
+    - name: Configure Zabbix server DB connection
+      lineinfile:
+        path: /etc/zabbix/zabbix_server.conf
+        regexp: '^DBPassword='
+        line: "DBPassword={{ zabbix_db_password }}"
+      notify: Restart Zabbix Server
+
+    - name: Ensure correct permissions on zabbix_server.conf
+      file:
+        path: /etc/zabbix/zabbix_server.conf
+        owner: root
+        group: zabbix
+        mode: '0640'
+
+    - name: Ensure DBHost is set to localhost in Zabbix server config
+      lineinfile:
+        path: /etc/zabbix/zabbix_server.conf
+        regexp: '^DBHost='
+        line: 'DBHost=localhost'
+        state: present
+      notify: Restart Zabbix Server
+
+    - name: Set PHP timezone to Moscow
+      lineinfile:
+        path: /etc/php/8.1/apache2/php.ini
+        regexp: '^;?date.timezone ='
+        line: 'date.timezone = Europe/Moscow'
+      notify: Restart Apache2
+
+    - name: Start and enable services
+      service:
+        name: "{{ item }}"
+        state: started
+        enabled: yes
+      loop:
+        - apache2
+        - zabbix-server
+        - zabbix-agent
+
+  post_tasks:
+    - name: Clean up deb package
+      file:
+        path: /tmp/zabbix-release_6.0-4+ubuntu22.04_all.deb
+        state: absent
+
+  handlers:
+    - name: Restart Zabbix Server
+      service:
+        name: zabbix-server
+        state: restarted
+
+    - name: Restart Apache2
+      service:
+        name: apache2
+        state: restarted
+```
+`Примечание:` Важно помнить, что создаваемые простые пароли применимы только в учебных целях. В реальной ситуации их необходимо сменить на сильные!
+  - zabbix-agent.yml:
+```yaml
+---
+- name: Deploy Zabbix Agent on Ubuntu 22.04
+  hosts: all:!zabbix  # Кроме сервера
+  become: yes
+  vars:
+    zabbix_server: "zabbix.ru-central1-a.internal"
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install wget if not present
+      apt:
+        name: wget
+        state: present
+
+    - name: Download Zabbix release package
+      apt:
+        deb: https://repo.zabbix.com/zabbix/6.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest_6.0+ubuntu22.04_all.deb
+        state: present
+
+    - name: Update apt cache after repo
+      apt:
+        update_cache: yes
+
+    - name: Install Zabbix Agent
+      apt:
+        name: zabbix-agent
+        state: present
+
+    - name: Remove all existing Server/ServerActive/Hostname lines
+      lineinfile:
+        path: /etc/zabbix/zabbix_agentd.conf
+        regexp: '^#?Server(Active)?=|^Hostname='
+        state: absent
+
+    - name: Add clean Server, ServerActive and Hostname lines
+      lineinfile:
+        path: /etc/zabbix/zabbix_agentd.conf
+        line: "{{ item }}"
+        state: present
+      loop:
+        - "Server={{ zabbix_server }}"
+        - "ServerActive={{ zabbix_server }}"
+        - "Hostname={{ inventory_hostname }}"
+
+    - name: Restart and enable Zabbix Agent
+      service:
+        name: zabbix-agent
+        state: restarted
+        enabled: yes
+
+  post_tasks:
+    - name: Clean up deb package
+      file:
+        path: /tmp/zabbix-release_latest_6.0+ubuntu22.04_all.deb
+        state: absent
+```
+4. **Обновление пользовательских скриптов**
+  - update-inventory.sh (обновление):
+```bash
+#!/bin/bash
+
+WEB1_IP=$(terraform output -raw web1_ip)
+WEB2_IP=$(terraform output -raw web2_ip)
+ELASTIC_IP=$(terraform output -raw elasticsearch_ip)
+KIBANA_IP=$(terraform output -raw kibana_ip)
+BASTION_IP=$(terraform output -raw bastion_ip)
+ZABBIX_IP=$(terraform output -raw zabbix_ip)
+
+cat > ~/netology-diploma/ansible/inventory.ini << EOF
+
+[public]
+zabbix ansible_host=$ZABBIX_IP
+kibana ansible_host=$KIBANA_IP
+bastion ansible_host=$BASTION_IP
+
+[public:vars]
+ansible_user=ubuntu
+ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+[private_servers]
+elasticsearch ansible_host=$ELASTIC_IP
+
+[private_servers:vars]
+ansible_user=ubuntu
+ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ProxyJump=bastion'
+
+[webservers]
+web1 ansible_host=$WEB1_IP
+web2 ansible_host=$WEB2_IP
+
+[webservers:vars]
+ansible_user=ubuntu
+ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ProxyJump=bastion'
+EOF
+```
+  - bastion-config.sh:
+```bash
+#!/bin/bash
+
+BASTION_IP=$(terraform output -raw bastion_ip)
+WEB1_IP=$(terraform output -raw web1_ip)
+WEB2_IP=$(terraform output -raw web2_ip)
+ELASTIC_IP=$(terraform output -raw elasticsearch_ip)
+KIBANA_IP=$(terraform output -raw kibana_ip)
+ZABBIX_IP=$(terraform output -raw zabbix_ip)
+
+cat > ~/.ssh/config << EOF
+# Bastion
+Host bastion
+    HostName $BASTION_IP
+    User ubuntu
+    Port 22
+    IdentityFile ~/.ssh/id_rsa
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+
+# Private servers (ProxyJump bastion)
+Host web1 web2 elasticsearch
+    HostName $WEB1_IP  # Для web1, web2, elastic — IP из переменных
+    User ubuntu
+    ProxyJump bastion
+    IdentityFile ~/.ssh/id_rsa
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+
+# Public servers (direct SSH)
+Host kibana
+    HostName $KIBANA_IP
+    User ubuntu
+    Port 22
+    IdentityFile ~/.ssh/id_rsa
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+
+Host zabbix
+    HostName $ZABBIX_IP
+    User ubuntu
+    Port 22
+    IdentityFile ~/.ssh/id_rsa
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+EOF
+
+ssh-keygen -R "$BASTION_IP" 2>/dev/null || true
+ssh-keygen -R "$WEB1_IP" 2>/dev/null || true
+ssh-keygen -R "$WEB2_IP" 2>/dev/null || true
+ssh-keygen -R "$ELASTIC_IP" 2>/dev/null || true
+ssh-keygen -R "$KIBANA_IP" 2>/dev/null || true
+ssh-keygen -R "$ZABBIX_IP" 2>/dev/null || true
+```
+5. **Обновление provisioners.tf для автоматического запуска Ansible**
+  - provisioners.tf
+```hcl
+resource "null_resource" "deploy_nginx" {
+  triggers = {
+    web1_id = yandex_compute_instance.web["web1"].id
+    web2_id = yandex_compute_instance.web["web2"].id
+  }
+
+  provisioner "local-exec" {
+    command     = <<-EOT
+      # Обновляем SSH и inventory
+      ~/netology-diploma/terraform/.bastion-config.sh
+      ~/netology-diploma/terraform/.update-inventory.sh
+
+      # Ожидаем "поднятия" web-серверов
+      sleep 30
+
+      # Запускаем Ansible
+      cd ${path.module}/../ansible
+      ansible-playbook -i inventory.ini --inventory hosts.yml playbooks/web-servers.yml
+    EOT
+    interpreter = ["/bin/bash", "-c"]
+  }
+
+  depends_on = [
+    yandex_compute_instance.web,
+    yandex_compute_instance.bastion
+  ]
+}
+
+# Zabbix Server deployment
+resource "null_resource" "deploy_zabbix_server" {
+  triggers = {
+    zabbix_id = yandex_compute_instance.zabbix.id
+  }
+
+  provisioner "local-exec" {
+    command     = <<-EOT
+      # Обновляем SSH и inventory (на всякий случай)
+      ~/netology-diploma/terraform/.update-inventory.sh
+      ~/netology-diploma/terraform/.bastion-config.sh
+
+      # Ожидаем "поднятия" ВМ Zabbix Server
+      sleep 30
+
+      # Проверяем доступность
+      ssh -o ConnectTimeout=10 zabbix exit || exit 1
+
+      # Запускаем Ansible
+      cd ${path.module}/../ansible
+      ansible-playbook -i inventory.ini --inventory hosts.yml playbooks/zabbix-server.yml
+    EOT
+    interpreter = ["/bin/bash", "-c"]
+  }
+
+  depends_on = [
+    yandex_compute_instance.zabbix,
+    yandex_vpc_security_group.zabbix
+  ]
+}
+
+resource "null_resource" "deploy_zabbix_agent" {
+  triggers = {
+    web1_id          = yandex_compute_instance.web["web1"].id
+    web2_id          = yandex_compute_instance.web["web2"].id
+    elasticsearch_id = yandex_compute_instance.elasticsearch.id
+    kibana_id        = yandex_compute_instance.kibana.id
+    bastion_id       = yandex_compute_instance.bastion.id
+    zabbix_id        = yandex_compute_instance.zabbix.id
+  }
+
+  provisioner "local-exec" {
+    command     = <<-EOT
+      # Обновляем SSH и inventory (на всякий случай)
+      ~/netology-diploma/terraform/update-inventory.sh
+      ~/netology-diploma/terraform/bastion-config.sh
+
+      # Ожидаем "поднятия" всех ВМ
+      sleep 30
+
+      # Запускаем Ansible
+      cd ${path.module}/../ansible
+      ansible-playbook -i inventory.ini --inventory hosts.yml playbooks/zabbix-agent.yml
+    EOT
+    interpreter = ["/bin/bash", "-c"]
+  }
+
+  depends_on = [
+    null_resource.deploy_zabbix_server,
+    yandex_compute_instance.web,
+    yandex_compute_instance.elasticsearch,
+    yandex_compute_instance.kibana,
+    yandex_compute_instance.bastion
+  ]
+}
+```
+6. **Настройка UI Zabbix**
+
+Адрес сервера на момент настройки: http://158.160.63.208/zabbix
+
+Страница доступна:
+
+![zabbix_available](./img/zabbix_available.png)
+
+Вводим пароль от базы данных, завершаем настройку, попадаем в гавное меню Zabbix.
+  - Настраиваем группы хостов
+В меню `Configuration` -> `Host groups` добавляем группу "Диплом".
+  - Настраиваем хосты
+В меню `Configuration` -> `Hosts` добавляем по очереди все имеющиеся хосты.
+Настройки хостов экспортируем в diploma-zabbix.json (включен в .gitignore).
+
+![zabbix_hosts](./img/zabbix_hosts.png)
+
+  - Настраиваем Dashboard
+В меню `Monitoring` -> `Dashboard` выбираем "Create dashboard" и настраиваем виджеты.
+
+Простейшая настройка "на скорую руку":
+
+![zabbix_dashboard](./img/zabbix_dashboard.png)
 
 </details>
