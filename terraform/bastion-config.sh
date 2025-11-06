@@ -18,8 +18,26 @@ Host bastion
     UserKnownHostsFile /dev/null
 
 # Private servers (ProxyJump bastion)
-Host web1 web2 elasticsearch
-    HostName $WEB1_IP  # Для web1, web2, elastic — IP из переменных
+Host web1
+    HostName $WEB1_IP
+    User ubuntu
+    ProxyJump bastion
+    IdentityFile ~/.ssh/id_rsa
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+
+# Private servers (ProxyJump bastion)
+Host web2
+    HostName $WEB2_IP
+    User ubuntu
+    ProxyJump bastion
+    IdentityFile ~/.ssh/id_rsa
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+
+# Private servers (ProxyJump bastion)
+Host elasticsearch
+    HostName $ELASTIC_IP
     User ubuntu
     ProxyJump bastion
     IdentityFile ~/.ssh/id_rsa
