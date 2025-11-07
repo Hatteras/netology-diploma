@@ -2033,6 +2033,273 @@ resource "null_resource" "deploy_zabbix_agent" {
 
 Простейшая настройка "на скорую руку":
 
-![zabbix_dashboard](./img/zabbix_dashboard.png)
+![zabbix_dashboard_screen1](./img/zabbix_dashboard_screen1.png)
+
+![zabbix_dashboard_screen2](./img/zabbix_dashboard_screen2.png)
 
 </details>
+
+<details>
+
+<summary> Этап 6: Установка и настройка ELK-stack (Elasticsearch, Kibana, Filebeat) </summary>
+
+На данном этапе производится установка Docker на целевые ВМ, поднятие контейнеров и настройка Elasticsearch, Kibana и Filebeat.
+
+1. **Создание playbook'а**
+  - elk-stack.yml:
+```yaml
+---
+- name: Deploy ELK Stack (Elasticsearch, Kibana, Filebeat) via Docker
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  vars:
+    elk_version: "8.19.6"
+    elasticsearch_ip: "{{ hostvars['elasticsearch']['ansible_default_ipv4']['address'] }}"
+    kibana_ip: "{{ hostvars['kibana']['ansible_default_ipv4']['address'] }}"
+
+  pre_tasks:
+    - name: Wait for system to be ready
+      wait_for_connection:
+
+  tasks:
+    - name: Install Docker
+      apt:
+        name: docker.io
+        state: present
+        update_cache: yes
+
+    - name: Start and enable Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    # Elasticsearch
+    - name: Start Elasticsearch container
+      docker_container:
+        name: elasticsearch
+        image: "elastic/elasticsearch:{{ elk_version }}"
+        state: started
+        restart_policy: always
+        ports:
+          - "9200:9200"
+          - "9300:9300"
+        env:
+          discovery.type: "single-node"
+          xpack.security.enabled: "false"
+          ES_JAVA_OPTS: "-Xms1g -Xmx1g"
+        volumes:
+          - "elasticsearch_/usr/share/elasticsearch/data"
+      when: inventory_hostname == 'elasticsearch'
+
+    # Kibana
+    - name: Start Kibana container
+      docker_container:
+        name: kibana
+        image: "elastic/kibana:{{ elk_version }}"
+        state: started
+        restart_policy: always
+        ports:
+          - "5601:5601"
+        env:
+          ELASTICSEARCH_HOSTS: "http://{{ elasticsearch_ip }}:9200"
+          SERVER_NAME: "kibana"
+      when: inventory_hostname == 'kibana'
+
+    # Filebeat
+    - name: Create Filebeat config directory
+      file:
+        path: /etc/filebeat
+        state: directory
+        mode: '0755'
+      when: inventory_hostname in ['web1', 'web2']
+
+    - name: Create Filebeat configuration file directly
+      copy:
+        content: |
+          filebeat.inputs:
+          - type: log
+            enabled: true
+            paths:
+              - /var/log/nginx/access.log
+              - /var/log/nginx/error.log
+            fields:
+              log_type: nginx
+
+          output.elasticsearch:
+            hosts: ["{{ hostvars['elasticsearch']['ansible_default_ipv4']['address'] }}:9200"]
+
+          setup.kibana:
+            host: "{{ hostvars['kibana']['ansible_default_ipv4']['address'] }}:5601"
+
+        dest: /etc/filebeat/filebeat.yml
+        mode: '0644'
+      when: inventory_hostname in ['web1', 'web2']
+
+    - name: Start Filebeat container
+      docker_container:
+        name: filebeat
+        image: "elastic/filebeat:{{ elk_version }}"
+        state: started
+        restart_policy: always
+        user: root
+        volumes:
+          - "/var/log/nginx:/var/log/nginx:ro"
+          - "/etc/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro"
+          - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      when: inventory_hostname in ['web1', 'web2']
+
+  handlers:
+    - name: Restart Docker
+      systemd:
+        name: docker
+        state: restarted
+```
+В связи с ограничениями, для установки используются контейнеры из Docker Hub, а не docker.elastic.co.
+2. **Обновление provisioners.tf**
+  - provisioners.tf:
+```hcl
+# Nginx deployment
+resource "null_resource" "deploy_nginx" {
+  triggers = {
+    web1_id = yandex_compute_instance.web["web1"].id
+    web2_id = yandex_compute_instance.web["web2"].id
+  }
+
+  provisioner "local-exec" {
+    command     = <<-EOT
+      # Обновляем SSH и inventory
+      ~/netology-diploma/terraform/bastion-config.sh
+      ~/netology-diploma/terraform/update-inventory.sh
+
+      # Ожидаем "поднятия" web-серверов
+      sleep 30
+
+      # Запускаем Ansible
+      cd ${path.module}/../ansible
+      ansible-playbook -i inventory.ini --inventory hosts.yml playbooks/web-servers.yml
+    EOT
+    interpreter = ["/bin/bash", "-c"]
+  }
+
+  depends_on = [
+    yandex_compute_instance.web,
+    yandex_compute_instance.bastion
+  ]
+}
+
+# Zabbix Server deployment
+resource "null_resource" "deploy_zabbix_server" {
+  triggers = {
+    zabbix_id = yandex_compute_instance.zabbix.id
+  }
+
+  provisioner "local-exec" {
+    command     = <<-EOT
+      # Обновляем SSH и inventory (на всякий случай)
+      ~/netology-diploma/terraform/update-inventory.sh
+      ~/netology-diploma/terraform/bastion-config.sh
+
+      # Ожидаем "поднятия" ВМ Zabbix Server
+      sleep 30
+
+      # Проверяем доступность
+      ssh -o ConnectTimeout=10 zabbix exit || exit 1
+
+      # Запускаем Ansible
+      cd ${path.module}/../ansible
+      ansible-playbook -i inventory.ini --inventory hosts.yml playbooks/zabbix-server.yml
+    EOT
+    interpreter = ["/bin/bash", "-c"]
+  }
+
+  depends_on = [
+    yandex_compute_instance.zabbix,
+    yandex_vpc_security_group.zabbix
+  ]
+}
+
+# Zabbix Agents deployment
+resource "null_resource" "deploy_zabbix_agent" {
+  triggers = {
+    web1_id          = yandex_compute_instance.web["web1"].id
+    web2_id          = yandex_compute_instance.web["web2"].id
+    elasticsearch_id = yandex_compute_instance.elasticsearch.id
+    kibana_id        = yandex_compute_instance.kibana.id
+    bastion_id       = yandex_compute_instance.bastion.id
+    zabbix_id        = yandex_compute_instance.zabbix.id
+  }
+
+  provisioner "local-exec" {
+    command     = <<-EOT
+      # Обновляем SSH и inventory (на всякий случай)
+      ~/netology-diploma/terraform/update-inventory.sh
+      ~/netology-diploma/terraform/bastion-config.sh
+
+      # Ожидаем "поднятия" всех ВМ
+      sleep 30
+
+      # Запускаем Ansible
+      cd ${path.module}/../ansible
+      ansible-playbook -i inventory.ini --inventory hosts.yml playbooks/zabbix-agent.yml
+    EOT
+    interpreter = ["/bin/bash", "-c"]
+  }
+
+  depends_on = [
+    null_resource.deploy_zabbix_server,
+    yandex_compute_instance.web,
+    yandex_compute_instance.elasticsearch,
+    yandex_compute_instance.kibana,
+    yandex_compute_instance.bastion
+  ]
+}
+
+# ELK Stack deployment
+resource "null_resource" "deploy_elk_stack" {
+  triggers = {
+    elasticsearch_id = yandex_compute_instance.elasticsearch.id
+    kibana_id        = yandex_compute_instance.kibana.id
+    web1_id          = yandex_compute_instance.web["web1"].id
+    web2_id          = yandex_compute_instance.web["web2"].id
+  }
+
+  provisioner "local-exec" {
+    command     = <<-EOT
+      # Обновляем SSH и inventory
+      ~/netology-diploma/terraform/bastion-config.sh
+      ~/netology-diploma/terraform/update-inventory.sh
+
+      # Ожидаем "поднятия" всех ВМ
+      sleep 30
+
+      # Запускаем Ansible
+      cd ${path.module}/../ansible
+      ansible-playbook -i inventory.ini --inventory hosts.yml playbooks/elk-stack.yml
+    EOT
+    interpreter = ["/bin/bash", "-c"]
+  }
+
+  depends_on = [
+    null_resource.deploy_zabbix_agent,
+    yandex_compute_instance.elasticsearch,
+    yandex_compute_instance.kibana,
+    yandex_compute_instance.web
+  ]
+}
+```
+3. **Установка коллекции Ansible для работы с Docker**
+```bash
+ansible-galaxy collection install community.docker
+```
+4. **Деплой**
+```bash
+terraform apply
+```
+5. **Проверка Kibana (web-интерфейс)**
+Переходим в Analytics -> Discover и видим, что данные от filebeat приходят:
+
+![filebeat_to_kibana_ok](./img/filebeat_to_kibana_ok.png)
+

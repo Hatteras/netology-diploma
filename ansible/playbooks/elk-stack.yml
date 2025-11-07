@@ -1,0 +1,108 @@
+---
+- name: Deploy ELK Stack (Elasticsearch, Kibana, Filebeat) via Docker
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  vars:
+    elk_version: "8.19.6"
+    elasticsearch_ip: "{{ hostvars['elasticsearch']['ansible_default_ipv4']['address'] }}"
+    kibana_ip: "{{ hostvars['kibana']['ansible_default_ipv4']['address'] }}"
+
+  pre_tasks:
+    - name: Wait for system to be ready
+      wait_for_connection:
+
+  tasks:
+    - name: Install Docker
+      apt:
+        name: docker.io
+        state: present
+        update_cache: yes
+
+    - name: Start and enable Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    # Elasticsearch
+    - name: Start Elasticsearch container
+      docker_container:
+        name: elasticsearch
+        image: "elastic/elasticsearch:{{ elk_version }}"
+        state: started
+        restart_policy: always
+        ports:
+          - "9200:9200"
+          - "9300:9300"
+        env:
+          discovery.type: "single-node"
+          xpack.security.enabled: "false"
+          ES_JAVA_OPTS: "-Xms1g -Xmx1g"
+        volumes:
+          - "elasticsearch_/usr/share/elasticsearch/data"
+      when: inventory_hostname == 'elasticsearch'
+
+    # Kibana
+    - name: Start Kibana container
+      docker_container:
+        name: kibana
+        image: "elastic/kibana:{{ elk_version }}"
+        state: started
+        restart_policy: always
+        ports:
+          - "5601:5601"
+        env:
+          ELASTICSEARCH_HOSTS: "http://{{ elasticsearch_ip }}:9200"
+          SERVER_NAME: "kibana"
+      when: inventory_hostname == 'kibana'
+
+    # Filebeat
+    - name: Create Filebeat config directory
+      file:
+        path: /etc/filebeat
+        state: directory
+        mode: '0755'
+      when: inventory_hostname in ['web1', 'web2']
+
+    - name: Create Filebeat configuration file directly
+      copy:
+        content: |
+          filebeat.inputs:
+          - type: log
+            enabled: true
+            paths:
+              - /var/log/nginx/access.log
+              - /var/log/nginx/error.log
+            fields:
+              log_type: nginx
+
+          output.elasticsearch:
+            hosts: ["{{ hostvars['elasticsearch']['ansible_default_ipv4']['address'] }}:9200"]
+
+          setup.kibana:
+            host: "{{ hostvars['kibana']['ansible_default_ipv4']['address'] }}:5601"
+            
+        dest: /etc/filebeat/filebeat.yml
+        mode: '0644'
+      when: inventory_hostname in ['web1', 'web2']
+
+    - name: Start Filebeat container
+      docker_container:
+        name: filebeat
+        image: "elastic/filebeat:{{ elk_version }}"
+        state: started
+        restart_policy: always
+        user: root
+        volumes:
+          - "/var/log/nginx:/var/log/nginx:ro"
+          - "/etc/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro"
+          - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      when: inventory_hostname in ['web1', 'web2']
+
+  handlers:
+    - name: Restart Docker
+      systemd:
+        name: docker
+        state: restarted
