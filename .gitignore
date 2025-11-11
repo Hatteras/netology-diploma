@@ -10,6 +10,7 @@ terraform.tfstate.*
 *.pem
 *.key
 *.json
+.vault_pass
 
 # Локальные файлы
 *.log

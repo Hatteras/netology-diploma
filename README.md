@@ -1575,6 +1575,24 @@ output "zabbix_fqdn" {
 }
 ```
 3. **Добавление плейбуков установки Zabbix и Zabbix Agent'ов**
+  - .vault_pass:
+```yaml
+# Сюда впиывается пароль от vault.yml
+```
+  - шифрование переменной:
+```bash
+ansible-vault encrypt_string --name 'zabbix_db_password' --vault-id diplom@ansible/.vault_pass '<пароль>' # Вместо <пароль> указывается реальный пароль
+```
+  - vault.yml:
+Создание:
+```bash
+mkdir -p ansible/group_vars/zabbix
+ansible-vault create ansible/group_vars/zabbix/vault.yml
+```
+Содержимое:
+```yml
+# вписывается содержимое, полученное от команды ansible-vault encrypt_string... из предыдущего шага.
+```
   - zabbix-server.yml:
 ```yaml
 ---
@@ -1584,7 +1602,6 @@ output "zabbix_fqdn" {
   vars:
     zabbix_db_user: "zabbix"
     zabbix_db_name: "zabbix"
-    zabbix_db_password: "zabbix_pass"
 
   tasks:
     - name: Update apt cache
@@ -1759,7 +1776,6 @@ output "zabbix_fqdn" {
         name: apache2
         state: restarted
 ```
-`Примечание:` Важно помнить, что создаваемые простые пароли применимы только в учебных целях. В реальной ситуации их необходимо сменить на сильные!
   - zabbix-agent.yml:
 ```yaml
 ---
@@ -1821,7 +1837,7 @@ output "zabbix_fqdn" {
         path: /tmp/zabbix-release_latest_6.0+ubuntu22.04_all.deb
         state: absent
 ```
-4. **Обновление пользовательских скриптов**
+1. **Обновление пользовательских скриптов**
   - update-inventory.sh (обновление):
 ```bash
 #!/bin/bash
@@ -1966,7 +1982,7 @@ resource "null_resource" "deploy_zabbix_server" {
 
       # Запускаем Ansible
       cd ${path.module}/../ansible
-      ansible-playbook -i inventory.ini --inventory hosts.yml playbooks/zabbix-server.yml
+      ansible-playbook -i inventory.ini --inventory hosts.yml playbooks/zabbix-server.yml --vault-id netology-diploma@.vault_pass
     EOT
     interpreter = ["/bin/bash", "-c"]
   }
