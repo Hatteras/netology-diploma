@@ -47,7 +47,7 @@ resource "null_resource" "deploy_zabbix_server" {
 
       # Запускаем Ansible
       cd ${path.module}/../ansible
-      ansible-playbook -i inventory.ini --inventory hosts.yml playbooks/zabbix-server.yml
+      ansible-playbook -i inventory.ini --inventory hosts.yml playbooks/zabbix-server.yml --vault-id netology-diploma@.vault_pass
     EOT
     interpreter = ["/bin/bash", "-c"]
   }
